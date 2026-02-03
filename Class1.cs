@@ -193,7 +193,7 @@ namespace MyGlobalSignalTower
         public static class Patch_UpdateGlobalHash
         {
             [HarmonyPostfix]
-            public static void Postfix(DFSDynamicHashSystem __instance)
+            public static void Postfix(long tick, bool isActive, CombatGroundSystem __instance)
             {
                 if (__instance.factory != null)
                 {
