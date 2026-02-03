@@ -43,6 +43,7 @@ namespace MyGlobalSignalTower
             Cfg_BattleBasePickRange = Config.Bind("2. 战场基站", "拾取范围", 600f, new ConfigDescription("", new AcceptableValueRange<float>(100f, 700f)));
             Cfg_BattleBaseConstructRange = Config.Bind("2. 战场基站", "建造范围", 600f, new ConfigDescription("", new AcceptableValueRange<float>(50f, 700f)));
             Cfg_GaussTurretAttackRange = Config.Bind("3. 炮塔增强", "通用攻击范围", 100000f, new ConfigDescription("", new AcceptableValueRange<float>(10000f, 100000f)));
+            Cfg_PlasmaMaxSpeed = Cfg_GaussTurretAttackRange.Value / 5;
             Cfg_EnableMarkAll = Config.Bind("4. 开关", "启用全局标记", true, "");
             Cfg_EnablePlasmaTurretPatch = Config.Bind("4. 开关", "启用等离子增强", true, "");
             Cfg_LockInsideLoop = Config.Bind("5. 性能优化", "标记逻辑使用内层锁", false, "false: 循环外加锁(推荐，性能高); true: 循环内加锁(兼容性好)");
@@ -52,7 +53,6 @@ namespace MyGlobalSignalTower
             Cfg_BattleBasePickRange.SettingChanged += (s, e) => ApplySettings();
             Cfg_BattleBaseConstructRange.SettingChanged += (s, e) => ApplySettings();
             Cfg_GaussTurretAttackRange.SettingChanged += (s, e) => ApplySettings();
-            Cfg_PlasmaMaxSpeed = Cfg_GaussTurretAttackRange.Value / 5;
             new Harmony("com.myself.globalsignaltower").PatchAll();
             Log.LogInfo("【全局信号塔】1.5.1 加载完成。");
         }
@@ -170,7 +170,7 @@ namespace MyGlobalSignalTower
                 plasma.prefabDesc.turretSpaceAttackRange = Cfg_GaussTurretAttackRange.Value;
                 plasma.prefabDesc.turretMaxAttackRange = Cfg_GaussTurretAttackRange.Value;
                 plasma.prefabDesc.turretPitchUpMax = 90f;
-                plasma.prefabDesc.turretPitchDownMax = 20f;
+                plasma.prefabDesc.turretPitchDownMax = 0f;
             }
             var gauss = LDB.items.Select(3001);
             if (gauss?.prefabDesc != null)
