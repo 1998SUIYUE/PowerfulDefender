@@ -189,7 +189,7 @@ namespace MyGlobalSignalTower
             }
         }
 
-        [HarmonyPatch(typeof(DFSDynamicHashSystem), "GameTick")]
+        [HarmonyPatch(typeof(CombatGroundSystem), "GameTick")]
         public static class Patch_UpdateGlobalHash
         {
             [HarmonyPostfix]
