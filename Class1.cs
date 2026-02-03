@@ -21,7 +21,7 @@ namespace MyGlobalSignalTower
         public static ConfigEntry<float> Cfg_BattleBasePickRange;
         public static ConfigEntry<float> Cfg_BattleBaseConstructRange;
         public static ConfigEntry<float> Cfg_GaussTurretAttackRange;
-        public static ConfigEntry<float> Cfg_PlasmaMaxSpeed;
+        public static float Cfg_PlasmaMaxSpeed;
         public static ConfigEntry<bool> Cfg_EnableMarkAll;
         public static ConfigEntry<bool> Cfg_EnablePlasmaTurretPatch;
 
@@ -36,15 +36,13 @@ namespace MyGlobalSignalTower
         void Awake()
         {
             Log = Logger;
-
-            Cfg_PowerConnect = Config.Bind("1. 信号塔", "电力连接距离", 60.5f, new ConfigDescription("", new AcceptableValueRange<float>(60.5f, 630f)));
-            Cfg_PowerCover = Config.Bind("1. 信号塔", "电力覆盖半径", 14.5f, new ConfigDescription("", new AcceptableValueRange<float>(14.5f, 630f)));
-            Cfg_GroundSignalRange = Config.Bind("1. 信号塔", "地面信号范围", 700f, new ConfigDescription("", new AcceptableValueRange<float>(50f, 5000f)));
-            Cfg_SpaceSignalRange = Config.Bind("1. 信号塔", "太空信号范围", 4200f, new ConfigDescription("", new AcceptableValueRange<float>(100f, 50000f)));
-            Cfg_BattleBasePickRange = Config.Bind("2. 战场基站", "拾取范围", 90f, new ConfigDescription("", new AcceptableValueRange<float>(90f, 630f)));
-            Cfg_BattleBaseConstructRange = Config.Bind("2. 战场基站", "建造范围", 60f, new ConfigDescription("", new AcceptableValueRange<float>(60f, 630f)));
-            Cfg_GaussTurretAttackRange = Config.Bind("3. 炮塔增强", "通用攻击范围", 100000f, new ConfigDescription("", new AcceptableValueRange<float>(100f, 1000000f)));
-            Cfg_PlasmaMaxSpeed = Config.Bind("3. 炮塔增强", "等离子弹速", 500000f, new ConfigDescription("", new AcceptableValueRange<float>(20000f, 1000000f)));
+            Cfg_PowerConnect = Config.Bind("1. 信号塔", "电力连接距离", 600f, new ConfigDescription("", new AcceptableValueRange<float>(100f, 700f)));
+            Cfg_PowerCover = Config.Bind("1. 信号塔", "电力覆盖半径", 600f, new ConfigDescription("", new AcceptableValueRange<float>(100f, 700f)));
+            Cfg_GroundSignalRange = Config.Bind("1. 信号塔", "地面信号范围", 600f, new ConfigDescription("", new AcceptableValueRange<float>(50f, 700f)));
+            Cfg_SpaceSignalRange = Config.Bind("1. 信号塔", "太空信号范围", 7000f, new ConfigDescription("", new AcceptableValueRange<float>(50f, 7000f)));
+            Cfg_BattleBasePickRange = Config.Bind("2. 战场基站", "拾取范围", 600f, new ConfigDescription("", new AcceptableValueRange<float>(100f, 700f)));
+            Cfg_BattleBaseConstructRange = Config.Bind("2. 战场基站", "建造范围", 600f, new ConfigDescription("", new AcceptableValueRange<float>(50f, 700f)));
+            Cfg_GaussTurretAttackRange = Config.Bind("3. 炮塔增强", "通用攻击范围", 100000f, new ConfigDescription("", new AcceptableValueRange<float>(10000f, 100000f)));
             Cfg_EnableMarkAll = Config.Bind("4. 开关", "启用全局标记", true, "");
             Cfg_EnablePlasmaTurretPatch = Config.Bind("4. 开关", "启用等离子增强", true, "");
             Cfg_LockInsideLoop = Config.Bind("5. 性能优化", "标记逻辑使用内层锁", false, "false: 循环外加锁(推荐，性能高); true: 循环内加锁(兼容性好)");
@@ -54,7 +52,7 @@ namespace MyGlobalSignalTower
             Cfg_BattleBasePickRange.SettingChanged += (s, e) => ApplySettings();
             Cfg_BattleBaseConstructRange.SettingChanged += (s, e) => ApplySettings();
             Cfg_GaussTurretAttackRange.SettingChanged += (s, e) => ApplySettings();
-
+            Cfg_PlasmaMaxSpeed = Cfg_GaussTurretAttackRange.Value / 5;
             new Harmony("com.myself.globalsignaltower").PatchAll();
             Log.LogInfo("【全局信号塔】1.5.1 加载完成。");
         }
@@ -225,7 +223,7 @@ namespace MyGlobalSignalTower
                 CodeMatcher matcher = new CodeMatcher(instructions);
                 var lifeField = AccessTools.Field(typeof(GeneralProjectile), "life");
                 var lifeMaxField = AccessTools.Field(typeof(GeneralProjectile), "lifemax");
-                int newLife = 12000;
+                int newLife = 120;
                 matcher.MatchForward(false, new CodeMatch(OpCodes.Stfld, lifeField));
                 if (matcher.IsValid)
                 {
@@ -252,7 +250,7 @@ namespace MyGlobalSignalTower
                 CodeMatcher matcher = new CodeMatcher(instructions);
                 while (matcher.MatchForward(false, new CodeMatch(OpCodes.Ldc_R8, 20000.0)).IsValid)
                 {
-                    matcher.SetOperandAndAdvance((double)Cfg_PlasmaMaxSpeed.Value);
+                    matcher.SetOperandAndAdvance((double)Cfg_PlasmaMaxSpeed);
                 }
                 return matcher.InstructionEnumeration();
             }
@@ -486,7 +484,7 @@ namespace MyGlobalSignalTower
             int totalActive = 0;
             for (int l = 0; l <= 3; l++) totalActive += dataCursors[l];
             if (totalActive == 0) return;
-            int batchSize = (totalActive / 60) + 1;
+            int batchSize = (totalActive / 600) + 1;
 
             for (int i = 0; i < batchSize; i++)
             {
@@ -535,7 +533,7 @@ namespace MyGlobalSignalTower
             float maxRangeSqr = maxRange * maxRange;
             var spacePool = sector.enemyPool;
             var stats = factory.skillSystem.combatStats.buffer;
-            for (int lvl = 0; lvl < LEVEL_COUNT; lvl++)
+            for (int lvl = 7; lvl < LEVEL_COUNT; lvl++)
             {
                 int start = lvl * capacityPerLevel;
                 int end = start + dataCursors[lvl];
