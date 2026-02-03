@@ -29,6 +29,7 @@ namespace MyGlobalSignalTower
         private static int update_frame_counter = 0;
         private const int REFRESH_INTERVAL = 60;
         private const int LIFE_TICK = 120;
+        private static readonly object markLock = new object();
 
         public static Dictionary<int, GlobalEnemyHashSystem> planetHashSystems = new Dictionary<int, GlobalEnemyHashSystem>();
 
@@ -62,9 +63,10 @@ namespace MyGlobalSignalTower
         {
             if (GameMain.instance == null || GameMain.isPaused || !GameMain.isRunning) return;
 
-            MarkAllEnemies();
+            // 1. 管理哈希系统 (主线程安全)
             ManageHashSystems();
 
+            // 2. 其他低频逻辑
             update_frame_counter++;
             if (update_frame_counter < REFRESH_INTERVAL) return;
             update_frame_counter = 0;
@@ -103,21 +105,25 @@ namespace MyGlobalSignalTower
                 Log.LogInfo("游戏开始，已重置哈希系统。");
             }
         }
-
-        private void MarkAllEnemies()
+        public static void MarkAllEnemies(PlanetFactory factory)
         {
-            if (!Cfg_EnableMarkAll.Value) return;
-            PlanetFactory factory = GameMain.localPlanet?.factory;
-            if (factory == null) return;
+            if (!Cfg_EnableMarkAll.Value || factory == null) return;
+
+            // 检查该星球是否有信号塔
             if (!TryGetBeaconPosition(factory, out _)) return;
+
             if (!planetHashSystems.TryGetValue(factory.planetId, out var hashSystem)) return;
+
             DefenseSystem defenseSystem = factory.defenseSystem;
             if (defenseSystem == null) return;
 
-            hashSystem.MarkAllEnemiesSpliced(defenseSystem, LIFE_TICK);
+            // 【关键】在多线程环境下调用 AddGlobalTargets 必须加锁
+            lock (markLock)
+            {
+                hashSystem.MarkAllEnemiesSpliced(defenseSystem, LIFE_TICK);
+            }
         }
-
-        private bool TryGetBeaconPosition(PlanetFactory factory, out Vector3 beaconPos)
+        public static bool TryGetBeaconPosition(PlanetFactory factory, out Vector3 beaconPos)
         {
             beaconPos = Vector3.zero;
             if (factory.defenseSystem?.beacons?.buffer == null) return false;
@@ -189,13 +195,20 @@ namespace MyGlobalSignalTower
             [HarmonyPostfix]
             public static void Postfix(DFSDynamicHashSystem __instance)
             {
-                if (__instance.factory != null && planetHashSystems.TryGetValue(__instance.factory.planetId, out var sys))
+                if (__instance.factory != null)
                 {
-                    sys.GameTick();
+                    // 1. 更新哈希表数据
+                    if (planetHashSystems.TryGetValue(__instance.factory.planetId, out var sys))
+                    {
+                        sys.GameTick();
+                        
+                        // 2. 【彦祖要求】在这里执行标记逻辑
+                        // 这样每个星球每帧只跑一次，且支持全宇宙星球
+                        MarkAllEnemies(__instance.factory);
+                    }
                 }
             }
         }
-
         [HarmonyPatch(typeof(TurretComponent), "Shoot_Plasma")]
         public static class Patch_ExtendBulletLife
         {
