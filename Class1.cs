@@ -36,14 +36,14 @@ namespace MyGlobalSignalTower
         {
             Log = Logger;
 
-            Cfg_PowerConnect = Config.Bind("1. 信号塔", "电力连接距离", 60.5f, new ConfigDescription("", new AcceptableValueRange<float>(60.5f, 630f)));
-            Cfg_PowerCover = Config.Bind("1. 信号塔", "电力覆盖半径", 14.5f, new ConfigDescription("", new AcceptableValueRange<float>(14.5f, 630f)));
+            Cfg_PowerConnect = Config.Bind("1. 信号塔", "电力连接距离", 600f, new ConfigDescription("", new AcceptableValueRange<float>(60.5f, 630f)));
+            Cfg_PowerCover = Config.Bind("1. 信号塔", "电力覆盖半径", 600f, new ConfigDescription("", new AcceptableValueRange<float>(14.5f, 630f)));
             Cfg_GroundSignalRange = Config.Bind("1. 信号塔", "地面信号范围", 700f, new ConfigDescription("", new AcceptableValueRange<float>(50f, 5000f)));
             Cfg_SpaceSignalRange = Config.Bind("1. 信号塔", "太空信号范围", 4200f, new ConfigDescription("", new AcceptableValueRange<float>(100f, 50000f)));
-            Cfg_BattleBasePickRange = Config.Bind("2. 战场基站", "拾取范围", 90f, new ConfigDescription("", new AcceptableValueRange<float>(90f, 630f)));
-            Cfg_BattleBaseConstructRange = Config.Bind("2. 战场基站", "建造范围", 60f, new ConfigDescription("", new AcceptableValueRange<float>(60f, 630f)));
-            Cfg_GaussTurretAttackRange = Config.Bind("3. 炮塔增强", "通用攻击范围", 100000f, new ConfigDescription("", new AcceptableValueRange<float>(100f, 1000000f)));
-            Cfg_PlasmaMaxSpeed = Config.Bind("3. 炮塔增强", "等离子弹速", 500000f, new ConfigDescription("", new AcceptableValueRange<float>(20000f, 1000000f)));
+            Cfg_BattleBasePickRange = Config.Bind("2. 战场基站", "拾取范围", 630f, new ConfigDescription("", new AcceptableValueRange<float>(90f, 630f)));
+            Cfg_BattleBaseConstructRange = Config.Bind("2. 战场基站", "建造范围", 600f, new ConfigDescription("", new AcceptableValueRange<float>(60f, 630f)));
+            Cfg_GaussTurretAttackRange = Config.Bind("3. 炮塔增强", "通用攻击范围", 100000f, new ConfigDescription("", new AcceptableValueRange<float>(10000f, 1000000f)));
+            Cfg_PlasmaMaxSpeed = Config.Bind("3. 炮塔增强", "等离子弹速", 500000f, new ConfigDescription("", new AcceptableValueRange<float>(20000f, 500000f)));
             Cfg_EnableMarkAll = Config.Bind("4. 开关", "启用全局标记", true, "");
             Cfg_EnablePlasmaTurretPatch = Config.Bind("4. 开关", "启用等离子增强", true, "");
 
