@@ -1,0 +1,38 @@
+# --- 核心忽略项 (必须) ---
+
+# 忽略编译输出目录
+[Bb]in/
+[Oo]bj/
+
+# 忽略 Visual Studio 临时文件和配置
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# --- C# / .NET 通用忽略项 ---
+
+# 忽略缩略图
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# 忽略 NuGet 包目录 (通常 Mod 开发不需要上传这个)
+packages/
+
+# 忽略临时文件
+*.log
+*.tmp
+
+# --- macOS / Linux 系统文件 (防止跨平台垃圾文件) ---
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# --- 针对 Mod 开发的特殊忽略 (可选) ---
+
+# 如果你把游戏 DLL 复制到了项目里的某个 lib 文件夹，
+# 且不想上传这些巨大的 DLL，可以取消下面这行的注释：
+# lib/
+# refs/
