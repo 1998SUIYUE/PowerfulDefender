@@ -13,7 +13,7 @@ namespace MyGlobalSignalTower
     public class GlobalSignalTowerMod : BaseUnityPlugin
     {
         internal static BepInEx.Logging.ManualLogSource Log;
-
+        public static readonly object markLock = new object();
         public static ConfigEntry<float> Cfg_PowerConnect;
         public static ConfigEntry<float> Cfg_PowerCover;
         public static ConfigEntry<float> Cfg_GroundSignalRange;
@@ -29,10 +29,10 @@ namespace MyGlobalSignalTower
         private static int update_frame_counter = 0;
         private const int REFRESH_INTERVAL = 60;
         private const int LIFE_TICK = 120;
-        private static readonly object markLock = new object();
+
 
         public static Dictionary<int, GlobalEnemyHashSystem> planetHashSystems = new Dictionary<int, GlobalEnemyHashSystem>();
-
+        public static ConfigEntry<bool> Cfg_LockInsideLoop;
         void Awake()
         {
             Log = Logger;
@@ -47,7 +47,7 @@ namespace MyGlobalSignalTower
             Cfg_PlasmaMaxSpeed = Config.Bind("3. 炮塔增强", "等离子弹速", 500000f, new ConfigDescription("", new AcceptableValueRange<float>(20000f, 1000000f)));
             Cfg_EnableMarkAll = Config.Bind("4. 开关", "启用全局标记", true, "");
             Cfg_EnablePlasmaTurretPatch = Config.Bind("4. 开关", "启用等离子增强", true, "");
-
+            Cfg_LockInsideLoop = Config.Bind("5. 性能优化", "标记逻辑使用内层锁", false, "false: 循环外加锁(推荐，性能高); true: 循环内加锁(兼容性好)");
             Cfg_PowerConnect.SettingChanged += (s, e) => ApplySettings();
             Cfg_PowerCover.SettingChanged += (s, e) => ApplySettings();
             Cfg_GroundSignalRange.SettingChanged += (s, e) => ApplySettings();
@@ -97,30 +97,38 @@ namespace MyGlobalSignalTower
 
         // 【新增】在游戏开始时强制重置，防止第二次读档报错
         [HarmonyPatch(typeof(GameMain), "Begin")]
-        class Patch_GameStart {
+        class Patch_GameStart
+        {
             [HarmonyPostfix]
-            static void Postfix() {
+            static void Postfix()
+            {
                 planetHashSystems.Clear();
                 lastStarId = -1;
                 Log.LogInfo("游戏开始，已重置哈希系统。");
             }
         }
+        // 在配置项定义区添加
         public static void MarkAllEnemies(PlanetFactory factory)
         {
             if (!Cfg_EnableMarkAll.Value || factory == null) return;
-
-            // 检查该星球是否有信号塔
             if (!TryGetBeaconPosition(factory, out _)) return;
-
             if (!planetHashSystems.TryGetValue(factory.planetId, out var hashSystem)) return;
 
             DefenseSystem defenseSystem = factory.defenseSystem;
             if (defenseSystem == null) return;
 
-            // 【关键】在多线程环境下调用 AddGlobalTargets 必须加锁
-            lock (markLock)
+            // 根据开关决定锁的范围
+            if (!Cfg_LockInsideLoop.Value)
             {
-                hashSystem.MarkAllEnemiesSpliced(defenseSystem, LIFE_TICK);
+                lock (markLock)
+                {
+                    hashSystem.MarkAllEnemiesSpliced(defenseSystem, LIFE_TICK, false);
+                }
+            }
+            else
+            {
+                // 传入 true，表示在方法内部循环加锁
+                hashSystem.MarkAllEnemiesSpliced(defenseSystem, LIFE_TICK, true);
             }
         }
         public static bool TryGetBeaconPosition(PlanetFactory factory, out Vector3 beaconPos)
@@ -201,7 +209,7 @@ namespace MyGlobalSignalTower
                     if (planetHashSystems.TryGetValue(__instance.factory.planetId, out var sys))
                     {
                         sys.GameTick();
-                        
+
                         // 2. 【彦祖要求】在这里执行标记逻辑
                         // 这样每个星球每帧只跑一次，且支持全宇宙星球
                         MarkAllEnemies(__instance.factory);
@@ -267,7 +275,7 @@ namespace MyGlobalSignalTower
                 if (checkOrbit == 0 && checkSpace == 0) return;
 
                 Vector3 turretPos = factory.entityPool[__instance.entityId].pos;
-                
+
                 double num5 = Math.Cos((double)(90f - pdesc.turretPitchDownMax) * 0.01745329238474369);
                 double num6 = Math.Cos((double)(90f + pdesc.turretPitchUpMax) * 0.01745329238474369);
 
@@ -320,8 +328,8 @@ namespace MyGlobalSignalTower
         private IDPOS_Ex[] tmp_datas;
         private int[] dataCursors;
         private int[] tmp_cursors;
-        private HashSet<int> old_ids_space;
-        private HashSet<int> old_ids_ground;
+        private bool[] old_ids_space ;
+        private bool[] old_ids_ground ;
 
         private int currentMarkLevel = 0;
         private int currentMarkIndex = 0;
@@ -329,7 +337,9 @@ namespace MyGlobalSignalTower
 
         private int groundScanCursor = 1;
         private int spaceScanCursor = 1;
-
+        // 【优化】预缓存当前帧的星球变换矩阵数据
+        private VectorLF3 cachedPlanetUPos;
+        private Quaternion cachedPlanetURot;
         public GlobalEnemyHashSystem(PlanetFactory factory)
         {
             this.factory = factory;
@@ -340,23 +350,25 @@ namespace MyGlobalSignalTower
             tmp_datas = new IDPOS_Ex[total];
             dataCursors = new int[LEVEL_COUNT];
             tmp_cursors = new int[LEVEL_COUNT];
-            old_ids_space = new HashSet<int>();
-            old_ids_ground = new HashSet<int>();
+            old_ids_space = new bool[65536];
+            old_ids_ground = new bool[65536];
         }
 
+        // 在 GlobalEnemyHashSystem.GameTick 中修改
         public void GameTick()
         {
-            // 【安全修复】检查 factory 是否还活着
-            if (factory == null || factory.enemyPool == null || sector == null || sector.enemyPool == null) return;
+            if (factory == null || sector == null) return;
 
             var swapData = tmp_datas; tmp_datas = hashDatas; hashDatas = swapData;
             var swapCursor = tmp_cursors; tmp_cursors = dataCursors; dataCursors = swapCursor;
             Array.Clear(hashDatas, 0, hashDatas.Length);
             Array.Clear(dataCursors, 0, dataCursors.Length);
-            old_ids_space.Clear();
-            old_ids_ground.Clear();
 
-            VectorLF3 uPos = planetData.uPosition;
+            Array.Clear(old_ids_space, 0, 65536);
+            Array.Clear(old_ids_ground, 0, 65536);
+
+            cachedPlanetUPos = planetData.uPosition;
+            cachedPlanetURot = planetData.runtimeRotation;
             int currentAstroId = planetData.astroId;
 
             for (int lvl = 0; lvl < LEVEL_COUNT; lvl++)
@@ -367,32 +379,49 @@ namespace MyGlobalSignalTower
                 {
                     IDPOS_Ex oldData = tmp_datas[i];
                     if (oldData.id == 0) continue;
-                    if (TryAddEnemy(oldData.id, oldData.originAstroId, uPos, currentAstroId, oldData.isSpaceUnit))
+
+                    // 修正调用参数，传入 currentAstroId
+                    if (TryAddEnemy(oldData.id, oldData.originAstroId, currentAstroId, oldData.isSpaceUnit))
                     {
-                        if (oldData.isSpaceUnit) old_ids_space.Add(oldData.id);
-                        else old_ids_ground.Add(oldData.id);
+                        if (oldData.isSpaceUnit) old_ids_space[oldData.id] = true;
+                        else old_ids_ground[oldData.id] = true;
                     }
                 }
             }
-            ScanNewGroundEnemies(uPos, currentAstroId);
-            ScanNewSpaceEnemies(uPos, currentAstroId);
+            // 修正调用参数
+            ScanNewGroundEnemies(currentAstroId);
+            ScanNewSpaceEnemies(currentAstroId);
         }
-
-        private bool TryAddEnemy(int id, int originAstroId, VectorLF3 uPos, int currentAstroId, bool isSpace)
+        private bool TryAddEnemy(int id, int originAstroId, int currentAstroId, bool isSpace)
         {
-            // 【安全修复】再次检查引用
-            if (factory == null || sector == null) return false;
             EnemyData[] pool = isSpace ? sector.enemyPool : factory.enemyPool;
             if (pool == null || id < 0 || id >= pool.Length) return false;
             ref EnemyData enemy = ref pool[id];
+
             if (enemy.id != id || enemy.isInvincible) return false;
             if (enemy.combatStatId > 0 && factory.skillSystem.combatStats.buffer[enemy.combatStatId].hp <= 0) return false;
 
+            // 【核心优化】手动展开 TransformFromAstro_ref 逻辑，跳过 galaxyAstros 查找
             VectorLF3 wPos;
-            sector.TransformFromAstro_ref(enemy.astroId, out wPos, ref enemy.pos);
-            double sqrDist = (wPos - uPos).sqrMagnitude;
+            if (enemy.astroId == 0)
+            {
+                wPos = enemy.pos;
+            }
+            else if (enemy.astroId == currentAstroId)
+            {
+                // 直接使用缓存的星球旋转和位置进行计算
+                wPos = cachedPlanetUPos + Maths.QRotateLF(cachedPlanetURot, enemy.pos);
+            }
+            else
+            {
+                // 极少数跨星球情况才走原版慢速逻辑
+                sector.TransformFromAstro_ref(enemy.astroId, out wPos, ref enemy.pos);
+            }
+
+            double sqrDist = (wPos - cachedPlanetUPos).sqrMagnitude;
             if (sqrDist > MAX_DIST_SQR) return false;
 
+            // 层级计算逻辑保持不变...
             int level = 0;
             for (int i = LEVEL_COUNT - 1; i >= 0; i--)
             {
@@ -401,6 +430,7 @@ namespace MyGlobalSignalTower
 
             if (dataCursors[level] < capacityPerLevel)
             {
+                // 同样优化逆变换
                 VectorLF3 lPosLF;
                 sector.InverseTransformToAstro_ref(currentAstroId, ref wPos, out lPosLF);
                 int idx = level * capacityPerLevel + dataCursors[level];
@@ -411,9 +441,9 @@ namespace MyGlobalSignalTower
             return false;
         }
 
-        private void ScanNewGroundEnemies(VectorLF3 uPos, int currentAstroId)
+        // 在 GlobalEnemyHashSystem 类中修改
+        private void ScanNewGroundEnemies(int currentAstroId)
         {
-            if (factory == null || factory.enemyPool == null) return;
             var pool = factory.enemyPool;
             int maxCursor = factory.enemyCursor;
             if (maxCursor <= 1) return;
@@ -421,16 +451,18 @@ namespace MyGlobalSignalTower
             {
                 groundScanCursor++;
                 if (groundScanCursor >= maxCursor) groundScanCursor = 1;
-                if (old_ids_ground.Contains(groundScanCursor)) continue;
+
+                // 修正：HashSet.Contains 换成 bool[] 索引
+                if (old_ids_ground[groundScanCursor]) continue;
+
                 ref EnemyData e = ref pool[groundScanCursor];
                 if (e.id == groundScanCursor && e.id != 0)
-                    TryAddEnemy(e.id, e.originAstroId, uPos, currentAstroId, false);
+                    TryAddEnemy(e.id, e.originAstroId, currentAstroId, false);
             }
         }
 
-        private void ScanNewSpaceEnemies(VectorLF3 uPos, int currentAstroId)
+        private void ScanNewSpaceEnemies(int currentAstroId)
         {
-            if (sector == null || sector.enemyPool == null) return;
             var pool = sector.enemyPool;
             int maxCursor = sector.enemyCursor;
             if (maxCursor <= 1) return;
@@ -438,31 +470,38 @@ namespace MyGlobalSignalTower
             {
                 spaceScanCursor++;
                 if (spaceScanCursor >= maxCursor) spaceScanCursor = 1;
-                if (old_ids_space.Contains(spaceScanCursor)) continue;
+
+                // 修正：HashSet.Contains 换成 bool[] 索引
+                if (old_ids_space[spaceScanCursor]) continue;
+
                 ref EnemyData e = ref pool[spaceScanCursor];
                 if (e.id == spaceScanCursor && e.id != 0)
-                    TryAddEnemy(e.id, e.originAstroId, uPos, currentAstroId, true);
+                    TryAddEnemy(e.id, e.originAstroId, currentAstroId, true);
             }
         }
 
-        public void MarkAllEnemiesSpliced(DefenseSystem ds, int lifeTick)
+        // 修改 MarkAllEnemiesSpliced 增加内层锁逻辑
+        public void MarkAllEnemiesSpliced(DefenseSystem ds, int lifeTick, bool useInternalLock)
         {
             int totalActive = 0;
             for (int l = 0; l <= 3; l++) totalActive += dataCursors[l];
             if (totalActive == 0) return;
             int batchSize = (totalActive / 60) + 1;
+
             for (int i = 0; i < batchSize; i++)
             {
-                int safety = 0;
-                while (currentMarkIndex >= dataCursors[currentMarkLevel] && safety < 4)
+                // 游标推进逻辑保持不变...
+                if (currentMarkIndex >= dataCursors[currentMarkLevel])
                 {
                     currentMarkIndex = 0;
                     currentMarkLevel++;
                     if (currentMarkLevel > 3) currentMarkLevel = 0;
-                    safety++;
+                    continue;
                 }
+
                 int arrayIdx = currentMarkLevel * capacityPerLevel + currentMarkIndex;
                 IDPOS_Ex d = hashDatas[arrayIdx];
+
                 if (d.id != 0)
                 {
                     bool valid = d.isSpaceUnit ? (currentMarkLevel <= 3) : (currentMarkLevel == 0);
@@ -473,13 +512,24 @@ namespace MyGlobalSignalTower
                         target.astroId = d.originAstroId;
                         target.type = ETargetType.Enemy;
                         target.lifeTick = lifeTick;
-                        ds.AddGlobalTargets(ref target);
+
+                        // 【优化】根据开关决定是否在循环内加锁
+                        if (useInternalLock)
+                        {
+                            lock (GlobalSignalTowerMod.markLock)
+                            {
+                                ds.AddGlobalTargets(ref target);
+                            }
+                        }
+                        else
+                        {
+                            ds.AddGlobalTargets(ref target);
+                        }
                     }
                 }
                 currentMarkIndex++;
             }
         }
-
         public IDPOS_Ex FindNearestSpaceEnemyFast(Vector3 muzzlePos, float maxRange, double pDown, double pUp, bool relay, bool space)
         {
             float maxRangeSqr = maxRange * maxRange;
