@@ -45,14 +45,18 @@ namespace MyGlobalSignalTower
             Cfg_GaussTurretAttackRange = Config.Bind("3. 炮塔增强", "通用攻击范围", 100000f, new ConfigDescription("", new AcceptableValueRange<float>(10000f, 100000f)));
             Cfg_PlasmaMaxSpeed = Cfg_GaussTurretAttackRange.Value / 5;
             Cfg_EnableMarkAll = Config.Bind("4. 开关", "启用全局标记", true, "");
-            Cfg_EnablePlasmaTurretPatch = Config.Bind("4. 开关", "启用等离子增强", true, "");
+            Cfg_EnablePlasmaTurretPatch = Config.Bind("4. 开关", "启用电浆炮增强", true, "");
             Cfg_LockInsideLoop = Config.Bind("5. 性能优化", "标记逻辑使用内层锁", false, "false: 循环外加锁(推荐，性能高); true: 循环内加锁(兼容性好)");
             Cfg_PowerConnect.SettingChanged += (s, e) => ApplySettings();
             Cfg_PowerCover.SettingChanged += (s, e) => ApplySettings();
             Cfg_GroundSignalRange.SettingChanged += (s, e) => ApplySettings();
+            Cfg_SpaceSignalRange.SettingChanged += (s, e) => ApplySettings();
             Cfg_BattleBasePickRange.SettingChanged += (s, e) => ApplySettings();
             Cfg_BattleBaseConstructRange.SettingChanged += (s, e) => ApplySettings();
             Cfg_GaussTurretAttackRange.SettingChanged += (s, e) => ApplySettings();
+            Cfg_EnableMarkAll.SettingChanged += (s, e) => ApplyMarkAllSettings();
+            Cfg_EnablePlasmaTurretPatch.SettingChanged += (s, e) => ApplyPlasmaPatchSettings();
+            Cfg_LockInsideLoop.SettingChanged += (s, e) => { /* 此参数在运行时自动读取，无需额外操作 */ };
             new Harmony("com.myself.globalsignaltower").PatchAll();
             Log.LogInfo("【全局信号塔】1.5.1 加载完成。");
         }
@@ -156,7 +160,14 @@ namespace MyGlobalSignalTower
             {
                 signal.prefabDesc.powerConnectDistance = Cfg_PowerConnect.Value;
                 signal.prefabDesc.powerCoverRadius = Cfg_PowerCover.Value;
-                signal.prefabDesc.beaconSignalRadius = 2000f;
+                signal.prefabDesc.beaconSignalRadius = Cfg_GroundSignalRange.Value;
+            }
+            var spaceSignal = LDB.items.Select(3008);
+            if (spaceSignal?.prefabDesc != null)
+            {
+                spaceSignal.prefabDesc.powerConnectDistance = Cfg_PowerConnect.Value;
+                spaceSignal.prefabDesc.powerCoverRadius = Cfg_PowerCover.Value;
+                spaceSignal.prefabDesc.beaconSignalRadius = Cfg_SpaceSignalRange.Value;
             }
             var bab = LDB.items.Select(3009);
             if (bab?.prefabDesc != null)
@@ -169,7 +180,7 @@ namespace MyGlobalSignalTower
             {
                 plasma.prefabDesc.turretSpaceAttackRange = Cfg_GaussTurretAttackRange.Value;
                 plasma.prefabDesc.turretMaxAttackRange = Cfg_GaussTurretAttackRange.Value;
-                plasma.prefabDesc.turretPitchUpMax = 90f;
+                plasma.prefabDesc.turretPitchUpMax = 89f;
                 plasma.prefabDesc.turretPitchDownMax = 0f;
             }
             var gauss = LDB.items.Select(3001);
@@ -177,6 +188,18 @@ namespace MyGlobalSignalTower
             {
                 gauss.prefabDesc.turretMaxAttackRange = Cfg_GaussTurretAttackRange.Value;
             }
+        }
+
+        private static void ApplyMarkAllSettings()
+        {
+            Log.LogInfo($"【全局标记设置】已更改为: {Cfg_EnableMarkAll.Value}");
+            // Cfg_EnableMarkAll 在 MarkAllEnemies 方法中会实时读取，无需额外操作
+        }
+
+        private static void ApplyPlasmaPatchSettings()
+        {
+            Log.LogInfo($"【等离子增强设置】已更改为: {Cfg_EnablePlasmaTurretPatch.Value}");
+            // Cfg_EnablePlasmaTurretPatch 在 Patch_PlasmaSearch.Postfix 方法中会实时读取，无需额外操作
         }
 
         private void RefreshBattleBaseRanges()
@@ -223,7 +246,7 @@ namespace MyGlobalSignalTower
                 CodeMatcher matcher = new CodeMatcher(instructions);
                 var lifeField = AccessTools.Field(typeof(GeneralProjectile), "life");
                 var lifeMaxField = AccessTools.Field(typeof(GeneralProjectile), "lifemax");
-                int newLife = 120;
+                int newLife = 60*5;
                 matcher.MatchForward(false, new CodeMatch(OpCodes.Stfld, lifeField));
                 if (matcher.IsValid)
                 {
@@ -256,33 +279,249 @@ namespace MyGlobalSignalTower
             }
         }
 
+        [HarmonyPatch(typeof(TurretComponent), "Shoot_Plasma")]
+        public static class Patch_ShootPlasmaStats
+        {
+            private static readonly object shootStatsLock = new object();
+            private static int shootCallCount = 0;
+            private static int shootTickCounter = 0;
+            private static long shootLastGameTick = 0;
+            
+            private static HashSet<int> uniqueShootTurretIds = new HashSet<int>();
+            private static int actualShotFiredCount = 0;
+            private static HashSet<int> uniqueFiredTurretIds = new HashSet<int>();
+            
+            // 用于在 Transpiler 中记录当前炮塔ID
+            [ThreadStatic]
+            private static int currentTurretEntityId;
+            
+            [HarmonyPrefix]
+            public static void Prefix(ref TurretComponent __instance, PlanetFactory factory)
+            {
+                // 记录当前炮塔ID，供 Transpiler 使用
+                currentTurretEntityId = __instance.entityId;
+                
+                lock (shootStatsLock)
+                {
+                    long currentTick = GameMain.gameTick;
+                    if (currentTick != shootLastGameTick)
+                    {
+                        shootLastGameTick = currentTick;
+                        shootTickCounter++;
+                        
+                        if (shootTickCounter >= 60)
+                        {
+                            Log.LogInfo($"[发射统计] 过去60个tick内:");
+                            Log.LogInfo($"  - Shoot_Plasma总调用: {shootCallCount} 次");
+                            Log.LogInfo($"  - 调用方法的炮塔总数: {uniqueShootTurretIds.Count} 个");
+                            Log.LogInfo($"  - 实际发射子弹: {actualShotFiredCount} 次");
+                            Log.LogInfo($"  - 实际发射的炮塔总数: {uniqueFiredTurretIds.Count} 个");
+                            
+                            shootCallCount = 0;
+                            uniqueShootTurretIds.Clear();
+                            actualShotFiredCount = 0;
+                            uniqueFiredTurretIds.Clear();
+                            shootTickCounter = 0;
+                        }
+                    }
+                    
+                    shootCallCount++;
+                    uniqueShootTurretIds.Add(__instance.entityId);
+                }
+            }
+            
+            // 在实际发射子弹时调用的统计方法
+            public static void OnBulletFired()
+            {
+                lock (shootStatsLock)
+                {
+                    actualShotFiredCount++;
+                    uniqueFiredTurretIds.Add(currentTurretEntityId);
+                }
+            }
+            
+            [HarmonyTranspiler]
+            static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator generator)
+            {
+                var codes = new List<CodeInstruction>(instructions);
+                var onBulletFiredMethod = AccessTools.Method(typeof(Patch_ShootPlasmaStats), nameof(OnBulletFired));
+                
+                // 查找 skillSystem.turretPlasmas.Add 的调用（这是创建子弹的地方）
+                // 在原版代码中是: using (skillSystem.turretPlasmas.Add(out num11))
+                // 对应的IL是调用 Add 方法后紧接着的代码
+                
+                for (int i = 0; i < codes.Count; i++)
+                {
+                    // 查找 callvirt 指令调用 Add 方法
+                    if (codes[i].opcode == OpCodes.Callvirt)
+                    {
+                        var method = codes[i].operand as System.Reflection.MethodInfo;
+                        if (method != null && method.Name == "Add" && method.DeclaringType != null)
+                        {
+                            // 在 Add 调用之后插入统计代码
+                            codes.Insert(i + 1, new CodeInstruction(OpCodes.Call, onBulletFiredMethod));
+                            Log.LogInfo($"[Transpiler] 已在 Shoot_Plasma 的第 {i} 条指令后插入发射统计");
+                            break;
+                        }
+                    }
+                }
+                
+                return codes;
+            }
+        }
+
         [HarmonyPatch(typeof(TurretComponent), "Search_Plasma")]
         public static class Patch_PlasmaSearch
         {
+            private static readonly object statsLock = new object();
+            private static int searchCallCount = 0;
+            private static int tickCounter = 0;
+            private static long lastGameTick = 0;
+            
+            private static int modSearchCallCount = 0;
+            private static int skipReason_disabled = 0;
+            private static int skipReason_hasTarget = 0;
+            private static int skipReason_noHashSystem = 0;
+            private static int skipReason_noOrbitSpace = 0;
+            private static int actualFindCallCount = 0;
+            
+            private static HashSet<int> uniqueTurretIds = new HashSet<int>();
+            private static HashSet<int> uniqueFindCallTurretIds = new HashSet<int>();
+            private static HashSet<int> uniqueFoundTargetTurretIds = new HashSet<int>();
+            private static int foundTargetCount = 0;
+            
+            // 记录找到的最近敌人距离
+            private static float closestEnemyDistance = float.MaxValue;
+            private static float furthestFoundEnemyDistance = 0f;
+            private static float totalFoundEnemyDistance = 0f;
+            private static int foundEnemyDistanceCount = 0;
+            
             [HarmonyPostfix]
             public static void Postfix(ref TurretComponent __instance, PlanetFactory factory, PrefabDesc pdesc)
             {
-                if (!Cfg_EnablePlasmaTurretPatch.Value) return;
-                if (__instance.target.id > 0) return;
-                if (!planetHashSystems.TryGetValue(factory.planetId, out var hashSystem)) return;
+                // 统计调用次数（加锁保护）
+                lock (statsLock)
+                {
+                    long currentTick = GameMain.gameTick;
+                    if (currentTick != lastGameTick)
+                    {
+                        lastGameTick = currentTick;
+                        tickCounter++;
+                        
+                        if (tickCounter >= 60)
+                        {
+                            Log.LogInfo($"[统计] 过去60个tick内:");
+                            Log.LogInfo($"  - Search_Plasma总调用: {searchCallCount} 次");
+                            Log.LogInfo($"  - 调用方法的炮塔总数: {uniqueTurretIds.Count} 个");
+                            Log.LogInfo($"  - 进入Mod逻辑: {modSearchCallCount} 次");
+                            Log.LogInfo($"  - 跳过原因 - 增强未启用: {skipReason_disabled} 次");
+                            Log.LogInfo($"  - 跳过原因 - 已有目标: {skipReason_hasTarget} 次");
+                            Log.LogInfo($"  - 跳过原因 - 无哈希系统: {skipReason_noHashSystem} 次");
+                            Log.LogInfo($"  - 跳过原因 - 不攻击轨道/太空: {skipReason_noOrbitSpace} 次");
+                            Log.LogInfo($"  - 实际调用FindNearest: {actualFindCallCount} 次");
+                            Log.LogInfo($"  - 实际调用FindNearest的炮塔总数: {uniqueFindCallTurretIds.Count} 个");
+                            Log.LogInfo($"  - FindNearest找到目标: {foundTargetCount} 次");
+                            Log.LogInfo($"  - 找到目标的炮塔总数: {uniqueFoundTargetTurretIds.Count} 个");
+                            
+                            if (foundEnemyDistanceCount > 0)
+                            {
+                                float avgDistance = totalFoundEnemyDistance / foundEnemyDistanceCount;
+                                Log.LogInfo($"  - 找到的敌人距离统计:");
+                                Log.LogInfo($"    * 最近距离: {closestEnemyDistance:F2} 米");
+                                Log.LogInfo($"    * 最远距离: {furthestFoundEnemyDistance:F2} 米");
+                                Log.LogInfo($"    * 平均距离: {avgDistance:F2} 米");
+                            }
+                            
+                            searchCallCount = 0;
+                            modSearchCallCount = 0;
+                            skipReason_disabled = 0;
+                            skipReason_hasTarget = 0;
+                            skipReason_noHashSystem = 0;
+                            skipReason_noOrbitSpace = 0;
+                            actualFindCallCount = 0;
+                            foundTargetCount = 0;
+                            uniqueTurretIds.Clear();
+                            uniqueFindCallTurretIds.Clear();
+                            uniqueFoundTargetTurretIds.Clear();
+                            closestEnemyDistance = float.MaxValue;
+                            furthestFoundEnemyDistance = 0f;
+                            totalFoundEnemyDistance = 0f;
+                            foundEnemyDistanceCount = 0;
+                            tickCounter = 0;
+                        }
+                    }
+                    searchCallCount++;
+                    uniqueTurretIds.Add(__instance.entityId);
+                }
+                
+                if (!Cfg_EnablePlasmaTurretPatch.Value)
+                {
+                    lock (statsLock) { skipReason_disabled++; }
+                    return;
+                }
+                
+                lock (statsLock) { modSearchCallCount++; }
+                
+
+                if (__instance.target.id > 0)
+                {
+                    lock (statsLock) { skipReason_hasTarget++; }
+                    return;
+                }
+                
+                if (!planetHashSystems.TryGetValue(factory.planetId, out var hashSystem))
+                {
+                    lock (statsLock) { skipReason_noHashSystem++; }
+                    return;
+                }
 
                 var caps = __instance.vsCaps;
                 var settings = __instance.vsSettings;
                 int checkOrbit = ((int)(caps & settings & VSLayerMask.OrbitHigh)) >> 4;
                 int checkSpace = ((int)(caps & settings & VSLayerMask.SpaceHigh)) >> 6;
-                if (checkOrbit == 0 && checkSpace == 0) return;
+                if (checkOrbit == 0 && checkSpace == 0)
+                {
+                    lock (statsLock) { skipReason_noOrbitSpace++; }
+                    return;
+                }
 
                 Vector3 turretPos = factory.entityPool[__instance.entityId].pos;
 
                 double num5 = Math.Cos((double)(90f - pdesc.turretPitchDownMax) * 0.01745329238474369);
                 double num6 = Math.Cos((double)(90f + pdesc.turretPitchUpMax) * 0.01745329238474369);
 
+                lock (statsLock) 
+                { 
+                    actualFindCallCount++;
+                    uniqueFindCallTurretIds.Add(__instance.entityId);
+                }
+                
                 IDPOS_Ex targetData = hashSystem.FindNearestSpaceEnemyFast(
                     turretPos, pdesc.turretSpaceAttackRange, num5, num6, checkOrbit > 0, checkSpace > 0
                 );
 
                 if (targetData.id > 0)
                 {
+                    float distance = (targetData.pos - turretPos).magnitude;
+                    
+                    lock (statsLock)
+                    {
+                        foundTargetCount++;
+                        uniqueFoundTargetTurretIds.Add(__instance.entityId);
+                        
+                        // 记录距离统计
+                        if (distance < closestEnemyDistance)
+                        {
+                            closestEnemyDistance = distance;
+                        }
+                        if (distance > furthestFoundEnemyDistance)
+                        {
+                            furthestFoundEnemyDistance = distance;
+                        }
+                        totalFoundEnemyDistance += distance;
+                        foundEnemyDistanceCount++;
+                    }
+                    
                     __instance.target.id = targetData.id;
                     __instance.target.astroId = targetData.originAstroId;
                     __instance.target.type = ETargetType.Enemy;
@@ -292,13 +531,14 @@ namespace MyGlobalSignalTower
         }
     }
 
+    // IDPOS_Ex 是一个结构体（struct），用于存储敌人的ID、位置等信息
     public struct IDPOS_Ex
     {
-        public int id;
-        public int originAstroId;
-        public Vector3 pos;
-        public bool isSpaceUnit;
-
+        public int id;              // 敌人ID
+        public int originAstroId;   // 敌人所在星球ID
+        public Vector3 pos;         // 敌人位置
+        public bool isSpaceUnit;    // 是否是太空单位
+        
         public IDPOS_Ex(int id, int originAstroId, Vector3 pos, bool isSpace)
         {
             this.id = id;
@@ -306,6 +546,17 @@ namespace MyGlobalSignalTower
             this.pos = pos;
             this.isSpaceUnit = isSpace;
         }
+        
+        // ⚠️ 【重要】这个结构体没有定义无参构造函数
+        // 当调用 default(IDPOS_Ex) 或 return default 时：
+        // - C#会自动创建一个"默认值"实例
+        // - 所有字段都被初始化为其类型的默认值：
+        //   * id = 0（int的默认值）
+        //   * originAstroId = 0
+        //   * pos = Vector3.zero
+        //   * isSpaceUnit = false
+        // - 因此 default 返回的是一个 id=0 的"空"对象
+        // - 这就是为什么第478行的判断 if (targetData.id > 0) 会失败
     }
 
     public class GlobalEnemyHashSystem
@@ -432,7 +683,7 @@ namespace MyGlobalSignalTower
                 VectorLF3 lPosLF;
                 sector.InverseTransformToAstro_ref(currentAstroId, ref wPos, out lPosLF);
                 int idx = level * capacityPerLevel + dataCursors[level];
-                hashDatas[idx] = new IDPOS_Ex(id, originAstroId, (Vector3)lPosLF, isSpace);
+                hashDatas[idx] = new IDPOS_Ex(id, originAstroId, (Vector3)lPosLF, enemy.isSpace);
                 dataCursors[level]++;
                 return true;
             }
@@ -481,8 +732,9 @@ namespace MyGlobalSignalTower
         // 修改 MarkAllEnemiesSpliced 增加内层锁逻辑
         public void MarkAllEnemiesSpliced(DefenseSystem ds, int lifeTick, bool useInternalLock)
         {
+            int level = 1;
             int totalActive = 0;
-            for (int l = 0; l <= 3; l++) totalActive += dataCursors[l];
+            for (int l = 0; l <= level; l++) totalActive += dataCursors[l];
             if (totalActive == 0) return;
             int batchSize = (totalActive / 600) + 1;
 
@@ -493,7 +745,7 @@ namespace MyGlobalSignalTower
                 {
                     currentMarkIndex = 0;
                     currentMarkLevel++;
-                    if (currentMarkLevel > 3) currentMarkLevel = 0;
+                    if (currentMarkLevel > level) currentMarkLevel = 0;
                     continue;
                 }
 
@@ -533,24 +785,73 @@ namespace MyGlobalSignalTower
             float maxRangeSqr = maxRange * maxRange;
             var spacePool = sector.enemyPool;
             var stats = factory.skillSystem.combatStats.buffer;
-            for (int lvl = 7; lvl < LEVEL_COUNT; lvl++)
+            for (int lvl = 0; lvl < LEVEL_COUNT; lvl++)
             {
                 int start = lvl * capacityPerLevel;
                 int end = start + dataCursors[lvl];
+                
                 for (int i = start; i < end; i++)
                 {
                     IDPOS_Ex d = hashDatas[i];
-                    if (d.id == 0 || !d.isSpaceUnit) continue;
+                    if (d.id == 0) break;
+                    
+                    if (!d.isSpaceUnit)
+                    {
+                        continue;
+                    }
+                    
                     ref EnemyData e = ref spacePool[d.id];
-                    if (e.id != d.id || e.isInvincible) continue;
-                    bool isRelay = e.dfRelayId > 0;
-                    if (isRelay && !relay) continue;
-                    if (!isRelay && !space) continue;
-                    if (e.combatStatId > 0 && stats[e.combatStatId].hp <= 0) continue;
-                    if ((d.pos - muzzlePos).sqrMagnitude > maxRangeSqr) continue;
-                    if (InternalCheckPitch(d.pos, muzzlePos, pDown, pUp)) return d;
+                    
+                    if (e.id != d.id)
+                    {
+                        continue;
+                    }
+                    
+                    if (e.isInvincible)
+                    {
+                        continue;
+                    }
+                    
+                    bool isRelay = e.isSpace == false;
+                    
+                    if (isRelay && !relay)
+                    {
+                        continue;
+                    }
+                    
+                    if (!isRelay && !space)
+                    {
+                        continue;
+                    }
+                    
+                    if (e.combatStatId > 0 && stats[e.combatStatId].hp <= 0)
+                    {
+                        continue;
+                    }
+                    
+                    float distSqr = (d.pos - muzzlePos).sqrMagnitude;
+                    if (distSqr > maxRangeSqr)
+                    {
+                        continue;
+                    }
+                    
+                    if (InternalCheckPitch(d.pos, muzzlePos, pDown, pUp) )
+                    {
+                        return d;  // ← 找到目标，返回敌人数据
+                    }
+                    else
+                    {
+                        // 俯仰角检查失败，继续检查下一个敌人
+                        continue;
+                    }
                 }
             }
+            
+            // ⚠️ 【关键】遍历完所有层级和所有敌人都没找到目标，返回 default
+            // default(IDPOS_Ex) 相当于 new IDPOS_Ex()，其中 id = 0
+            // 这会导致 Patch_PlasmaSearch.Postfix 的第478行判断失败（targetData.id > 0 为false）
+            // 结果：炮塔的 target.id 保持为0，isLockingTarget 保持为false
+            // 最终：Shoot_Plasma 会因为 target.id <= 0 而不发射
             return default;
         }
 
@@ -560,7 +861,7 @@ namespace MyGlobalSignalTower
             float n4 = enemyPos.x - muzzlePos.x; float n5 = enemyPos.y - muzzlePos.y; float n6 = enemyPos.z - muzzlePos.z;
             float n7 = (float)Math.Sqrt((double)(n1 * n1 + n2 * n2 + n3 * n3));
             float n8 = (float)Math.Sqrt((double)(n4 * n4 + n5 * n5 + n6 * n6));
-            if (n7 < 1E-06f || n8 < 1E-06f) return false;
+            
             double cosValue = (double)((n1 * n4 + n2 * n5 + n3 * n6) / (n7 * n8));
             if (cosValue < -1.0) cosValue = -1.0; else if (cosValue > 1.0) cosValue = 1.0;
             return cosValue <= pDown - 1E-06 && cosValue >= pUp + 1E-06;
