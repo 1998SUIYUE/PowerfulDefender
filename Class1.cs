@@ -614,7 +614,7 @@ namespace MyGlobalSignalTower
                 for (int i = start; i < end; i++)
                 {
                     IDPOS_Ex d = hashDatas[i];
-                    if (d.id == 0) continue;
+
                     
                     if (!d.isSpaceUnit)
                     {
