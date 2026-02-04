@@ -1,6 +1,7 @@
 using BepInEx;
 using BepInEx.Configuration;
 using HarmonyLib;
+using Steamworks;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -736,7 +737,7 @@ namespace MyGlobalSignalTower
             int totalActive = 0;
             for (int l = 0; l <= level; l++) totalActive += dataCursors[l];
             if (totalActive == 0) return;
-            int batchSize = (totalActive / 600) + 1;
+            int batchSize = (totalActive / (60*15)) + 1;
 
             for (int i = 0; i < batchSize; i++)
             {
