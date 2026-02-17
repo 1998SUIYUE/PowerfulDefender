@@ -8,15 +8,23 @@ using System.Linq;
 using System.Reflection.Emit;
 using UnityEngine;
 
+
 namespace MyGlobalSignalTower
 {
     [BepInPlugin("com.myself.globalsignaltower", "Global Signal Tower Ultimate", "1.5.1")]
+
+    // ========================================================================
+    // 【相机增强】实现超远距离星球缩放，不进入星系视角
+    // ========================================================================
+
+
+
     public class GlobalSignalTowerMod : BaseUnityPlugin
     {
 
         public static readonly object markLock = new object();
         public static ConfigEntry<float> Cfg_PowerConnect;
-   
+
         public static ConfigEntry<float> Cfg_PowerCover;
         public static ConfigEntry<float> Cfg_GroundSignalRange;
         public static ConfigEntry<float> Cfg_SpaceSignalRange;
@@ -38,8 +46,8 @@ namespace MyGlobalSignalTower
         void Awake()
         {
 
-            Cfg_PowerConnect = Config.Bind("1. 信号塔", "电力连接距离", 600f, new ConfigDescription("", new AcceptableValueRange<float>(100f, 700f)));
-            Cfg_PowerCover = Config.Bind("1. 信号塔", "电力覆盖半径", 600f, new ConfigDescription("", new AcceptableValueRange<float>(100f, 700f)));
+            Cfg_PowerConnect = Config.Bind("1. 信号塔", "电力连接距离", 60f, new ConfigDescription("", new AcceptableValueRange<float>(100f, 700f)));
+            Cfg_PowerCover = Config.Bind("1. 信号塔", "电力覆盖半径", 60f, new ConfigDescription("", new AcceptableValueRange<float>(100f, 700f)));
             Cfg_GroundSignalRange = Config.Bind("1. 信号塔", "地面信号范围", 600f, new ConfigDescription("", new AcceptableValueRange<float>(50f, 700f)));
             Cfg_SpaceSignalRange = Config.Bind("1. 信号塔", "太空信号范围", 7000f, new ConfigDescription("", new AcceptableValueRange<float>(50f, 7000f)));
             Cfg_BattleBasePickRange = Config.Bind("2. 战场基站", "拾取范围", 600f, new ConfigDescription("", new AcceptableValueRange<float>(100f, 700f)));
@@ -98,7 +106,17 @@ namespace MyGlobalSignalTower
                 }
             }
         }
-
+        // 如果你希望在地面（RTS模式）也能直接缩放到这么远，还需要补一个 RTSPoser 的补丁
+        //[HarmonyPatch(typeof(RTSPoser), "Calculate")]
+        //public static class Patch_RTSPoser_Zoom
+        //{
+        //    [HarmonyPrefix]
+        //    public static void Prefix(RTSPoser __instance)
+        //    {
+        //        // 允许在地面视角也缩放到 5000 米
+        //        __instance.distMax = 5000f;
+        //    }
+        //}
         // 【新增】在游戏开始时强制重置，防止第二次读档报错
         [HarmonyPatch(typeof(GameMain), "Begin")]
         class Patch_GameStart
@@ -185,11 +203,11 @@ namespace MyGlobalSignalTower
                 plasma.prefabDesc.turretPitchUpMax = 89f;
                 plasma.prefabDesc.turretPitchDownMax = 0f;
             }
-            var gauss = LDB.items.Select(3001);
-            if (gauss?.prefabDesc != null)
-            {
-                gauss.prefabDesc.turretMaxAttackRange = Cfg_GaussTurretAttackRange.Value;
-            }
+            //var gauss = LDB.items.Select(3001);
+            //if (gauss?.prefabDesc != null)
+            //{
+            //    gauss.prefabDesc.turretMaxAttackRange = Cfg_GaussTurretAttackRange.Value;
+            //}
         }
 
         private static void ApplyMarkAllSettings()
@@ -246,7 +264,7 @@ namespace MyGlobalSignalTower
                 CodeMatcher matcher = new CodeMatcher(instructions);
                 var lifeField = AccessTools.Field(typeof(GeneralProjectile), "life");
                 var lifeMaxField = AccessTools.Field(typeof(GeneralProjectile), "lifemax");
-                int newLife = 60*5;
+                int newLife = 60 * 5;
                 matcher.MatchForward(false, new CodeMatch(OpCodes.Stfld, lifeField));
                 if (matcher.IsValid)
                 {
@@ -286,30 +304,30 @@ namespace MyGlobalSignalTower
         {
 
 
-            
+
             // 记录找到的最近敌人距离
 
-            
+
             [HarmonyPostfix]
             public static void Postfix(ref TurretComponent __instance, PlanetFactory factory, PrefabDesc pdesc)
             {
 
-                
+
                 if (!Cfg_EnablePlasmaTurretPatch.Value)
                 {
- 
+
                     return;
                 }
-                
-                
-                
+
+
+
 
                 if (__instance.target.id > 0)
                 {
-                    
+
                     return;
                 }
-                
+
                 if (!planetHashSystems.TryGetValue(factory.planetId, out var hashSystem))
                 {
 
@@ -332,7 +350,7 @@ namespace MyGlobalSignalTower
                 double num6 = Math.Cos((double)(90f + pdesc.turretPitchUpMax) * 0.01745329238474369);
 
 
-                
+
                 IDPOS_Ex targetData = hashSystem.FindNearestSpaceEnemyFast(
                     turretPos, pdesc.turretSpaceAttackRange, num5, num6, checkOrbit > 0, checkSpace > 0
                 );
@@ -340,9 +358,9 @@ namespace MyGlobalSignalTower
                 if (targetData.id > 0)
                 {
                     float distance = (targetData.pos - turretPos).magnitude;
-                    
 
-                    
+
+
                     __instance.target.id = targetData.id;
                     __instance.target.astroId = targetData.originAstroId;
                     __instance.target.type = ETargetType.Enemy;
@@ -359,7 +377,7 @@ namespace MyGlobalSignalTower
         public int originAstroId;   // 敌人所在星球ID
         public Vector3 pos;         // 敌人位置
         public bool isSpaceUnit;    // 是否是太空单位
-        
+
         public IDPOS_Ex(int id, int originAstroId, Vector3 pos, bool isSpace)
         {
             this.id = id;
@@ -367,7 +385,7 @@ namespace MyGlobalSignalTower
             this.pos = pos;
             this.isSpaceUnit = isSpace;
         }
-        
+
         // ⚠️ 【重要】这个结构体没有定义无参构造函数
         // 当调用 default(IDPOS_Ex) 或 return default 时：
         // - C#会自动创建一个"默认值"实例
@@ -398,8 +416,8 @@ namespace MyGlobalSignalTower
         private IDPOS_Ex[] tmp_datas;
         private int[] dataCursors;
         private int[] tmp_cursors;
-        private bool[] old_ids_space ;
-        private bool[] old_ids_ground ;
+        private bool[] old_ids_space;
+        private bool[] old_ids_ground;
 
         private int currentMarkLevel = 0;
         private int currentMarkIndex = 0;
@@ -557,7 +575,7 @@ namespace MyGlobalSignalTower
             int totalActive = 0;
             for (int l = 0; l <= level; l++) totalActive += dataCursors[l];
             if (totalActive == 0) return;
-            int batchSize = (totalActive / (60*15)) + 1;
+            int batchSize = (totalActive / (60 * 10)) + 1;
 
             for (int i = 0; i < batchSize; i++)
             {
@@ -606,57 +624,56 @@ namespace MyGlobalSignalTower
             float maxRangeSqr = maxRange * maxRange;
             var spacePool = sector.enemyPool;
             var stats = factory.skillSystem.combatStats.buffer;
-            for (int lvl = 0; lvl < LEVEL_COUNT; lvl++)
+            for (int lvl = 0; lvl < LEVEL_COUNT - 1; lvl++)
             {
                 int start = lvl * capacityPerLevel;
                 int end = start + dataCursors[lvl];
-                
+
                 for (int i = start; i < end; i++)
                 {
                     IDPOS_Ex d = hashDatas[i];
 
-                    
                     if (!d.isSpaceUnit)
                     {
                         continue;
                     }
-                    
+
                     ref EnemyData e = ref spacePool[d.id];
-                    
+                    if (e.combatStatId > 0 && (float)(stats[e.combatStatId].hp + stats[e.combatStatId].hpIncoming) / (float)stats[e.combatStatId].hpMax < -0.01f)
+                    {
+                        continue;
+                    }
                     if (e.id != d.id)
                     {
                         continue;
                     }
-                    
+
                     if (e.isInvincible)
                     {
                         continue;
                     }
-                    
+
                     bool isRelay = e.isSpace == false;
-                    
+
                     if (isRelay && !relay)
                     {
                         continue;
                     }
-                    
+
                     if (!isRelay && !space)
                     {
                         continue;
                     }
                     // if ((float)(stat.hp + stat.hpIncoming) / (float)stat.hpMax < -0.01f)
-                    if (e.combatStatId > 0 && (float)(stats[e.combatStatId].hp+ stats[e.combatStatId].hpIncoming)/(float)stats[e.combatStatId].hpMax < -0.01f)
-                    {
-                        continue;
-                    }
-                    
+
+
                     float distSqr = (d.pos - muzzlePos).sqrMagnitude;
                     if (distSqr > maxRangeSqr)
                     {
                         continue;
                     }
-                    
-                    if (InternalCheckPitch(d.pos, muzzlePos, pDown, pUp) )
+
+                    if (InternalCheckPitch(d.pos, muzzlePos, pDown, pUp))
                     {
                         return d;  // ← 找到目标，返回敌人数据
                     }
@@ -667,7 +684,7 @@ namespace MyGlobalSignalTower
                     }
                 }
             }
-            
+
             // ⚠️ 【关键】遍历完所有层级和所有敌人都没找到目标，返回 default
             // default(IDPOS_Ex) 相当于 new IDPOS_Ex()，其中 id = 0
             // 这会导致 Patch_PlasmaSearch.Postfix 的第478行判断失败（targetData.id > 0 为false）
@@ -682,7 +699,7 @@ namespace MyGlobalSignalTower
             float n4 = enemyPos.x - muzzlePos.x; float n5 = enemyPos.y - muzzlePos.y; float n6 = enemyPos.z - muzzlePos.z;
             float n7 = (float)Math.Sqrt((double)(n1 * n1 + n2 * n2 + n3 * n3));
             float n8 = (float)Math.Sqrt((double)(n4 * n4 + n5 * n5 + n6 * n6));
-            
+
             double cosValue = (double)((n1 * n4 + n2 * n5 + n3 * n6) / (n7 * n8));
             if (cosValue < -1.0) cosValue = -1.0; else if (cosValue > 1.0) cosValue = 1.0;
             return cosValue <= pDown - 1E-06 && cosValue >= pUp + 1E-06;
